@@ -297,15 +297,15 @@ def build():
                     exe_proc(["dotnet", "publish", project_files[0], "-f", "netcoreapp2.0",
                               "-o", build_path, "-v", DOTNET_VERBOSITY])
 
-                    # copy Dockerfil.fore to publish dir
+                    # copy Dockerfile to publish dir
                     build_dockerfile = os.path.join(
                         build_path, docker_file_name)
 
                     copyfile(docker_file, build_dockerfile)
 
-                    image_source_name = "{0}:{1}".format(module, tag_name)
+                    image_source_name = "{0}:{1}".format(module, tag_name).lower()
                     image_destination_name = "{0}/{1}:{2}".format(
-                        CONTAINER_REGISTRY_SERVER, module, tag_name)
+                        CONTAINER_REGISTRY_SERVER, module, tag_name).lower()
 
                     # cd to the build output to build the docker image
                     project_dir = os.getcwd()
