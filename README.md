@@ -1,10 +1,29 @@
 # Azure IoT Edge Template
 
-This project will greatly simplify your Azure IoT Edge development.
+This project will **greatly simplify** your Azure IoT Edge development.
 
 It includes:
- - A script (**edge.py**) that simplifies runtime, modules and docker management.
- - A suggested folder structure for Edge projects including **modules**, **build**, and **config** folders.
+ - A script (**edge.py**) that simplifies **runtime**, **modules**, and **docker** management.
+ - A suggested folder structure for Edge projects including **modules**, **build**, **logs**, and **config** folders.
+
+
+## Usage
+
+After you get this script setup, you will be able to:
+
+**build**, **push** and **deploy** your modules with the following command:
+
+```
+python edge.py modules --build --deploy
+```
+
+**setup** and **start** the Edge runtime with the following command:
+
+```
+python edge.py runtime --setup --start
+```
+
+and much more...
 
 ## Edge Script
 You will find the **edge.py** script in the root of this repository.  It has the following commands:
@@ -12,29 +31,32 @@ You will find the **edge.py** script in the root of this repository.  It has the
 **runtime**
 
 `edge.py runtime --help`
-- `--start`               Starts Edge Runtime
-- `--stop`              Stops Edge Runtime
-- `--restart`             Restarts Edge Runtime
-- `--setup`               Setup Edge Runtime using runtime.json in build/config directory
-- `--status`              Edge Runtime Status
-- `--logs`                Edge Runtime Logs
-- `--set-container-registry` Pulls Edge Runtime from Docker Hub and pushes to container registry
-- `--set-config`          Expands env vars in /config and copies to /build/config
+- `--start`               Starts Edge Runtime. Calls iotedgectl start.
+- `--stop`                Stops Edge Runtime. Calls iotedgectl stop.
+- `--restart`             Restarts Edge Runtime. Calls iotedgectl stop, removes module containers and images, calls iotedgectl setup (with --config-file) and then calls iotedgectl start.
+- `--setup`               Setup Edge Runtime using runtime.json in build/config directory.
+- `--status`              Edge Runtime Status. Calls iotedgectl status.
+- `--set-container-registry` Pulls Edge Runtime from Docker Hub and pushes to your specified container registry. Also, updates config files to use CONTAINER_REGISTRY_* instead of the Microsoft Docker hub. See CONTAINER_REGISTRY env vars.
+- `--set-config`          Expands env vars in /config and copies to /build/config.
 
 **modules**
 
 `edge.py modules --help`
-- `--build`       Builds and pushes modules specified in ACTIVE_MODULES env var to container registry
-- `--deploy`      Deploys modules to Edge device using modules.json in build/config directory
-- `--set-config`  Expands env vars in /config and copies to /build/config
+- `--build`       Builds and pushes modules specified in ACTIVE_MODULES env var to specified container registry.
+- `--deploy`      Deploys modules to Edge device using modules.json in build/config directory.
+- `--set-config`  Expands env vars in /config and copies to /build/config.
 
 **docker**
 
 `edge.py docker --help`
-- `--setup-local-registry` Sets up a local Docker registry
-- `--clean`              Removes all the Docker containers and Images
-- `--remove-containers`  Removes all the Docker containers
-- `--remove-images`      Removes all the Docker images
+- `--setup-local-registry`    Sets up a local Docker registry to save you from having to push and pull from a remote registry while developing. All you need to do is set CONTAINER_REGISTRY_SERVER to localhost:5000. This command is exposed if you want to call it manually.
+- `--clean`               Removes all the Docker containers and Images.
+- `--remove-modules`      Removes only the edge modules Docker containers and images specified in ACTIVE_MODULES, not edgeAgent or edgeHub.
+- `--remove-containers`   Removes all the Docker containers.
+- `--remove-images`       Removes all the Docker images.
+- `--logs`                Opens a new terminal window for edgeAgent, edgeHub and each edge module and saves to LOGS_PATH. Configure the  terminal command with LOGS_CMD.
+- `--show-logs`           Opens a new terminal window for edgeAgent, edgeHub and each edge module. Configure the terminal command with LOGS_CMD.
+- `--save-logs`           Saves edgeAgent, edgeHub and each edge module logs to LOGS_PATH.
 
 ## Folder Structure
 
@@ -95,7 +117,7 @@ Here's what you need to do to get `edge.py` running on your dev machine. If you 
 1. Install [.NET Core SDK](https://www.microsoft.com/net/core#windowscmd)
     - The .NET Core SDK does not run on ARM, so you do not need to install this on Raspberry Pi.
 
-1. Clone This Repository
+1. Clone or Fork this Repository
 
     `git clone https://github.com/jonbgallant/azure-iot-edge-template.git project-name`
 
@@ -209,7 +231,7 @@ iotedgectl setup --config-file runtime.json
 iotedgectl start
 ```
 
-Having said that, there's nothing stopping you from deploying `edge.py` to your Edge device. It may be helpful if you want to run the `edge.py docker --clean` command to clean up Docker containers and images. Or if you want to run `edge.py runtime --logs` to see all the log files on the device.
+Having said that, there's nothing stopping you from deploying `edge.py` to your Edge device. It may be helpful if you want to run the `edge.py docker --clean` command to clean up Docker containers and images. Or if you want to run `edge.py docker --show-logs` to see all the log files on the device or `edge.py docker --save-logs` to output to the LOGS_PATH directory.
 
 > Please note that the .NET Core SDK does not support ARM, so you will not be able to run `modules --build` or `modules --deploy` directly on a Raspberry Pi.
 
@@ -235,7 +257,7 @@ Each of the edge.py commands can be run individually or as a group.  Let's now b
 python edge.py modules --build --deploy
 ```
 
-The `--build` command will build each module in the `modules` folder and push it to your container registry.  The `--deploy` command will apply the `build/modules.json` configuration file to your Edge device.
+The- `--build` command will build each module in the `modules` folder and push it to your container registry.  The- `--deploy` command will apply the `build/modules.json` configuration file to your Edge device.
 
 You can configure what modules will be built and deployed using the `ACTIVE_MODULES` env var in the `.env` file.
 
@@ -247,7 +269,7 @@ You can configure what modules will be built and deployed using the `ACTIVE_MODU
 python edge.py runtime --setup --start
 ```
 
-The `--setup` command will apply the `/build/runtime.json` file to your Edge device.  The `--start` command will start the Edge runtime.
+The- `--setup` command will apply the `/build/runtime.json` file to your Edge device.  The- `--start` command will start the Edge runtime.
    
 ### Monitor Messages
 
@@ -264,23 +286,42 @@ python edge.py runtime --set-container-registry
 ```
 
 
-### View Runtime Logs
+### View Docker Logs
 
-The edge.py script also include a "Logs" command that will open a new command prompt for each module it finds in your Edge config.  Just run the following command:
+#### Show Logs
+The edge.py script also include a "Show Logs" command that will open a new command prompt for each module it finds in your Edge config.  Just run the following command:
 
 > Note: I haven't figured out how to launch new SSH windows in a reliable way.  It's in the backlog.  For now, you must be on the desktop of the machine to run this command.
 
 ```
-python edge.py runtime --logs
+python edge.py docker --show-logs
 ```
 
 You can configure the logs command in the `.env` file with the `LOGS_CMD` setting.  The `.env.tmp` file provides two options, one for [ConEmu](https://conemu.github.io/) and one for Cmd.exe.
+
+#### Save Logs
+
+You can also output the logs to the LOGS_PATH directory.  The following command will output all the logs and add them to an `edge-logs.zip` file that you can send to the Azure IoT support team if they request it.
+
+```
+python edge.py docker --save-logs
+```
+
+#### Both Show and Save Logs
+
+Run the following to show and save logs with a single command
+
+```
+python edge.py docker --logs
+```
 
 ## Test Coverage
 
 This script has been tested with the following:
 - Windows 10 Fall Creators Update
-- Raspberry Pi with Raspbian Stretch (Runtime Only, .NET Core SDK not supported on ARM.)
+- Ubuntu 16.04
+- Mac Sierra 10.12.6
+- Raspberry Pi with Raspbian Stretch (**.NET Core Runtime Only**, .NET Core SDK not supported on ARM.) - You cannot use Raspberry Pi as a Edge dev machine, but it can host the Edge runtime.
 - Python 2.7.13 and Python 3.6.3
 - Docker Version 17.09.1-ce-win42 (14687), Channel: stable, 3176a6a
 
@@ -302,6 +343,20 @@ This script has been tested with the following:
     
     Solution: Run pip install with -H `sudo -H pip install -U -r requirements.txt`
 
+1. Latest Docker Image Not Pulled from Registry
+
+    By design, Docker only pulls images that have been changed.  When you are developing you tend to push new images on a frequent basis, which Docker will not pull unless it has a unique tag.  You could assign every push a new tag, or you can simply run the following command on the Edge device.
+
+    ```
+    python edge.py runtime --restart
+    ```
+
+    This stops the runtime, removes your ACTIVE_MODULES containers and images, calls setup and then starts the runtime.  Docker will then be forced to pull the imageS from the registry because it does not have them locally anymore.
+
+1. 404 Client Error: Not Found ("No such container: edgeAgent")
+
+    I occasionally see this when running `edge.py runtime --restart`, but I have never seen it cause any issues.  LMK if you see any issues because of it.
+    
 ## Backlog
 
 Please see the [GitHub project page](https://github.com/jonbgallant/azure-iot-edge-template/projects) for backlog tasks.

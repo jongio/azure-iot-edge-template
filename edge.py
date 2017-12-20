@@ -6,6 +6,7 @@ import subprocess
 import sys
 import json
 import argparse
+import zipfile
 from base64 import b64encode, b64decode
 from hashlib import sha256
 from time import time
@@ -43,6 +44,8 @@ RUNTIME_VERBOSITY = os.environ["RUNTIME_VERBOSITY"]
 RUNTIME_HOME_DIR = os.environ["RUNTIME_HOME_DIR"]
 MODULES_CONFIG_FILE = os.environ["MODULES_CONFIG_FILE"]
 RUNTIME_CONFIG_FILE = os.environ["RUNTIME_CONFIG_FILE"]
+LOGS_PATH = os.environ["LOGS_PATH"]
+MODULES_PATH = os.environ["MODULES_PATH"]
 IOT_REST_API_VERSION = os.environ["IOT_REST_API_VERSION"]
 DOTNET_VERBOSITY = os.environ["DOTNET_VERBOSITY"]
 LOGS_CMD = os.environ["LOGS_CMD"]
@@ -52,7 +55,7 @@ LOGS_CMD = os.environ["LOGS_CMD"]
 
 def exe_proc(params):
     proc = subprocess.Popen(
-        params, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        params, stdout=subprocess.PIPE, stderr=subprocess.PIPE, shell=True)
 
     stdout_data, stderr_data = proc.communicate()
     print(decode(stdout_data))
@@ -104,6 +107,8 @@ def get_config_files():
     return [os.path.join(config_dir, f) for f in os.listdir(
         config_dir) if f.endswith(".json")]
 
+def get_active_modules():
+    return [module.strip() for module in ACTIVE_MODULES.split(",") if module]
 
 # Runtime
 
@@ -131,17 +136,45 @@ def status():
               "status"])
 
 
-def logs():
+def handle_logs_cmd(show, save):
     modules_config = json.load(open(MODULES_CONFIG_FILE))
     props = modules_config["moduleContent"]["$edgeAgent"]["properties.desired"]
 
-    open_log(props["systemModules"])
-    open_log(props["modules"])
+    process_logs(show, save, props["systemModules"])
+    process_logs(show, save, props["modules"])
+
+    if save:
+        zip_logs()
 
 
-def open_log(modules):
+def process_logs(show, save, modules):
+    # Create LOGS_PATH dir if it doesn't exist
+    if save and not os.path.exists(LOGS_PATH):
+        os.makedirs(LOGS_PATH)
+
     for module in modules:
-        os.system(LOGS_CMD.format(module))
+        if show:
+            os.system(LOGS_CMD.format(module))
+
+        if save:
+            exe_proc(["docker", "logs", module, ">",
+                      os.path.join(LOGS_PATH, module + ".log")])
+
+
+def zip_logs():
+    log_files = [os.path.join(LOGS_PATH, f)
+                 for f in os.listdir(LOGS_PATH) if f.endswith(".log")]
+    zip_path = os.path.join(LOGS_PATH, 'edge-logs.zip')
+
+    print("Creating {0} file".format(zip_path))
+
+    zipf = zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED)
+
+    for log_file in log_files:
+        print("Adding {0} to zip". format(log_file))
+        zipf.write(log_file)
+
+    zipf.close()
 
 
 def set_container_registry():
@@ -219,14 +252,13 @@ def build():
     print("Building Modules")
 
     # Get all the modules to build as specified in config.
-    modules_to_process = [module.strip()
-                          for module in ACTIVE_MODULES.split(",") if module]
+    modules_to_process = get_active_modules()
 
-    for module in os.listdir("modules"):
+    for module in os.listdir(MODULES_PATH):
 
         if len(modules_to_process) == 0 or modules_to_process[0] == "*" or module in modules_to_process:
 
-            module_dir = os.path.join("modules", module)
+            module_dir = os.path.join(MODULES_PATH, module)
 
             # 1. dotnet restore
             print("Restoring Module " + module)
@@ -303,7 +335,8 @@ def build():
 
                     copyfile(docker_file, build_dockerfile)
 
-                    image_source_name = "{0}:{1}".format(module, tag_name).lower()
+                    image_source_name = "{0}:{1}".format(
+                        module, tag_name).lower()
                     image_destination_name = "{0}/{1}:{2}".format(
                         CONTAINER_REGISTRY_SERVER, module, tag_name).lower()
 
@@ -345,14 +378,10 @@ def setup_docker():
     else:
         print("Logging into container registry: " + CONTAINER_REGISTRY_SERVER)
         print(docker_client.login(registry=CONTAINER_REGISTRY_SERVER,
-                                    username=CONTAINER_REGISTRY_USERNAME, password=CONTAINER_REGISTRY_PASSWORD))
-
-       
+                                  username=CONTAINER_REGISTRY_USERNAME, password=CONTAINER_REGISTRY_PASSWORD))
 
         print(docker_api.login(registry=CONTAINER_REGISTRY_SERVER,
-                                 username=CONTAINER_REGISTRY_USERNAME, password=CONTAINER_REGISTRY_PASSWORD))
-
-
+                               username=CONTAINER_REGISTRY_USERNAME, password=CONTAINER_REGISTRY_PASSWORD))
 
 
 def setup_local_registry():
@@ -393,6 +422,22 @@ def setup_local_registry():
     print(docker_client.login(CONTAINER_REGISTRY_SERVER))
     print(docker_api.login(CONTAINER_REGISTRY_SERVER))
 
+
+def remove_modules(): 
+    print("Removing Edge Modules Containers and Images from Docker")
+
+    for module in get_active_modules():
+        print("Searching for {0} Containers".format(module))
+        containers = docker_client.containers.list(filters={"name": module})
+        for container in containers:
+            print("Removing Container: " + str(container))
+            container.remove(force=True)
+
+        print("Searching for {0} Images".format(module))
+        for image in docker_client.images.list():
+            if module in str(image): 
+                print("Removing Module Image: " + str(image))
+                docker_client.images.remove(image=image.id, force=True)
 
 def remove_containers():
     print("Removing Containers....")
@@ -480,14 +525,12 @@ if __name__ == "__main__":
 
         if args.restart:
             stop()
+            remove_modules()
             setup()
             start()
 
         if args.status:
             status()
-
-        if args.logs:
-            logs()
 
     def docker_cmd(args):
         # Docker Commands
@@ -495,14 +538,25 @@ if __name__ == "__main__":
             setup_local_registry()
 
         if args.clean:
+            args.remove_modules = True
             args.remove_containers = True
             args.remove_images = True
+
+        if args.remove_modules:
+            remove_modules()
 
         if args.remove_containers:
             remove_containers()
 
         if args.remove_images:
             remove_images()
+
+        if args.logs: 
+            args.show_logs = True
+            args.save_logs = True
+
+        if args.show_logs or args.save_logs:
+            handle_logs_cmd(args.show_logs, args.save_logs)
 
     parser = argparse.ArgumentParser()
 
@@ -511,55 +565,64 @@ if __name__ == "__main__":
     runtimeparser = subparsers.add_parser("runtime")
     runtimeparser.required = False
     runtimeparser.set_defaults(func=runtime_cmd)
-    runtimeparser.add_argument("--start", help="Starts Edge Runtime",
+    runtimeparser.add_argument("--start", help="Starts Edge Runtime. Calls iotedgectl start.",
                                action="store_true", default=False)
 
-    runtimeparser.add_argument("--stop", help="Stops Edge Runtime",
+    runtimeparser.add_argument("--stop", help="Stops Edge Runtime. Calls iotedgectl stop.",
                                action="store_true", default=False)
 
-    runtimeparser.add_argument("--restart", help="Restarts Edge Runtime",
+    runtimeparser.add_argument("--restart", help="Restarts Edge Runtime. Calls iotedgectl stop, removes module containers and images, calls iotedgectl setup (with --config-file) and then calls iotedgectl start.",
                                action="store_true", default=False)
 
-    runtimeparser.add_argument("--setup", help="Setup Edge Runtime using runtime.json in build/config directory",
+    runtimeparser.add_argument("--setup", help="Setup Edge Runtime using runtime.json in build/config directory.",
                                action="store_true", default=False)
 
-    runtimeparser.add_argument("--status", help="Edge Runtime Status",
-                               action="store_true", default=False)
-
-    runtimeparser.add_argument("--logs", help="Edge Runtime Logs",
+    runtimeparser.add_argument("--status", help="Edge Runtime Status. Calls iotedgectl status.",
                                action="store_true", default=False)
 
     runtimeparser.add_argument("--set-container-registry",
-                               help="Pulls Edge Runtime from Docker Hub and pushes to container registry", action="store_true", default=False)
+                               help="Pulls Edge Runtime from Docker Hub and pushes to your specified container registry. Also, updates config files to use CONTAINER_REGISTRY_* instead of the Microsoft Docker hub. See CONTAINER_REGISTRY env vars.", action="store_true", default=False)
 
-    runtimeparser.add_argument("--set-config", help="Expands env vars in /config and copies to /build/config",
+    runtimeparser.add_argument("--set-config", help="Expands env vars in /config and copies to /build/config.",
                                action="store_true", default=True)
 
     modulesparser = subparsers.add_parser("modules")
     modulesparser.set_defaults(func=modules_cmd)
 
-    modulesparser.add_argument("--build", help="Builds and pushes modules specified in ACTIVE_MODULES env var to container registry",
+    modulesparser.add_argument("--build", help="Builds and pushes modules specified in ACTIVE_MODULES env var to specified container registry.",
                                action="store_true", default=False)
 
-    modulesparser.add_argument("--deploy", help="Deploys modules to Edge device using modules.json in build/config directory",
+    modulesparser.add_argument("--deploy", help="Deploys modules to Edge device using modules.json in build/config directory.",
                                action="store_true", default=False)
 
-    modulesparser.add_argument("--set-config", help="Expands env vars in /config and copies to /build/config",
+    modulesparser.add_argument("--set-config", help="Expands env vars in /config and copies to /build/config.",
                                action="store_true", default=True)
 
     dockerparser = subparsers.add_parser("docker")
     dockerparser.set_defaults(func=docker_cmd)
 
-    dockerparser.add_argument("--setup-local-registry", help="Sets up a local Docker registry",
+    dockerparser.add_argument("--setup-local-registry", help="Sets up a local Docker registry to save you from having to push and pull from a remote registry while developing. All you need to do is set CONTAINER_REGISTRY_SERVER to localhost:5000. This command is exposed if you want to call it manually.",
                               action="store_true", default=False)
 
-    dockerparser.add_argument("--clean", help="Removes all the Docker containers and Images",
+    dockerparser.add_argument("--clean", help="Removes all the Docker containers and Images.",
+                              action="store_true", default=False)
+
+    dockerparser.add_argument("--remove-modules", help="Removes only the edge modules Docker containers and images specified in ACTIVE_MODULES, not edgeAgent or edgeHub.",
                               action="store_true", default=False)
 
     dockerparser.add_argument("--remove-containers",
                               help="Removes all the Docker containers", action="store_true", default=False)
 
-    dockerparser.add_argument("--remove-images", help="Removes all the Docker images",
+    dockerparser.add_argument("--remove-images", help="Removes all the Docker images.",
+                              action="store_true", default=False)
+
+    dockerparser.add_argument("--logs", help="Opens a new terminal window for edgeAgent, edgeHub and each edge module and saves to LOGS_PATH. Configure the terminal command with LOGS_CMD.",
+                              action="store_true", default=False)
+
+    dockerparser.add_argument("--show-logs", help="Opens a new terminal window for edgeAgent, edgeHub and each edge module. Configure the terminal command with LOGS_CMD.",
+                              action="store_true", default=False)
+
+    dockerparser.add_argument("--save-logs", help="Saves edgeAgent, edgeHub and each edge module logs to LOGS_PATH.",
                               action="store_true", default=False)
 
     if len(sys.argv) == 1:
