@@ -1,10 +1,2 @@
 **/.vs
 **/.vscode
-**/bin
-**/obj
-**/out
-build
-.env
-/deploy/ARMDeployment/Deployment.targets
-venv
-logs
